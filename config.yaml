@@ -1,0 +1,133 @@
+experiment:
+    name: my_first_experiment
+    version: 1
+
+#######################################################################################
+#######################################################################################
+
+dataset:
+    db_table: shohel.refined_stock_data
+    stock_symbol: AAPL
+
+    # FORMAT: %Y-%m-%d %H:%M:%S
+    timestamps:
+        start: '2019-01-01 00:00:00'
+        end: '2019-01-10 00:00:00'
+
+    # PROVIDE A MIN ROW COUNT FOR THE DATASET
+    # FOR SANITY CHECKING
+    min_length_threshold: 10
+
+    # EXPECTED ROW SCHEMA
+    expected_schema:
+        symbol: str
+        timestamp: str
+        open: float
+        close: float
+        high: float
+        low: float
+        volume: int
+
+#######################################################################################
+#######################################################################################
+
+feature_engineering:
+    features:
+
+        # # CONVERT INPUT TO DATAFRAME
+        # -   feature_name: to_dataframe
+        #     feature_params: {}
+
+        # ADD STOCHASTIC K FEATURE
+        -   feature_name: stochastic_k
+            feature_params:
+                window_size: 5
+                output_column: sk5
+
+        # SHIFT CLOSE COLUMN FORWARD BY 14 STEPS
+        # THIS WILL BE THE TARGET COLUMN FOR MODEL TRAINING
+        -   feature_name: shift_column
+            feature_params:
+                target_column: close
+                shift_by: 14
+                output_column: shifted_close
+
+        # # CONVERT DATAFRAME TO FLOAT MATRIX
+        # -   feature_name: to_feature_matrix
+        #     feature_params:
+        #         feature_columns:
+        #             - open
+        #             - close
+        #             - high
+        #             - low
+        #             - volume
+        #             # - sk5
+        #             # - shifted_close
+
+    # AFTER ALL FEATURES ARE APPLIED
+    # SHOULD WE DROP ROWS WITH NANs?
+    
+    # TODO
+    # TODO
+    # TODO
+    drop_nan_rows: True
+
+#######################################################################################
+#######################################################################################
+
+model_training:
+
+    # WHAT COLUMNS TO USE FOR FEATURES
+    feature_columns:
+        - open
+        - close
+        - high
+        - low
+        - volume
+        - sk5
+
+    # WHAT COLUMN DO WE WANT TO PREDICT
+    label_column: shifted_close
+
+    # HOW SHOULD THE DATASET BE SEGMENTED?
+    segmentation:
+        - train: 0.75
+        - test: 0.15
+        - validate: 0.1
+
+    # WHAT SCALAR SHOULD WE USE?
+    scalar: sklearn.standard_scalar
+
+#######################################################################################
+#######################################################################################
+
+trading_strategy:
+
+    # STATIC PARAMS FOR THE BASE STRATEGY
+    base_strategy:
+        batch_size: 3
+        transaction_fee: 2
+        init_capital: 100
+        init_stocks: 0
+        # allow_short_selling: True
+
+    # WHAT CHILD STRATEGY SHOULD IMPLEMEMENT THE
+    # BUY/SELL FUNCTIONALITY
+    custom_strategy:
+        strategy_name: weighted_strategy
+        strategy_params:
+            buy_weight: 1.05
+            sell_weight: 0.95
+
+    # IDEA
+    # custom_strategies:
+    #     -   strategy_name: weighted_strategy
+    #         strategy_params:
+    #             buy_weight: 1.05
+    #             sell_weight: 0.95
+    #     -   strategy_name: other_strat
+    #         strategy_params:
+    #             foo: bar
+    #     -   strategy_name: third_strat
+    #         strategy_params:
+    #             biz: baz
