@@ -1,88 +1,108 @@
-from common import misc
-from pandas import DataFrame
-
-from actions.data_retrieval.load_dataset import load_dataset
-from actions.feature_engineering.to_dataframe.to_dataframe import to_dataframe
-from actions.feature_engineering.shift_column.shift_column import shift_column
-from actions.feature_engineering.stochastic_k.stochastic_k import stochastic_k
-from actions.feature_engineering.to_feature_matrix.to_feature_matrix import to_feature_matrix
-from actions.feature_engineering.drop_nan_rows.drop_nan_rows import drop_nan_rows
-
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import Pipeline
+from common import misc, testing
+from actions.dataset.load_dataset import load_dataset
 
 def run():
+    try:
 
-    # LOAD EXPERIMENT YAML
-    experiment_config: dict = misc.load_yaml('config.yaml')
-    pipeline_components = []
+    ##########################################################################
+    ### LOAD EXPERIMENT YAML CONFIG
 
-    # LOAD A SAMPLE DATASET
-    dataset_config: dict = experiment_config['dataset']
-    dataset: list[dict] = load_dataset(dataset_config, unittesting=200)
+        experiment_config: dict = misc.load_yaml('config.yaml')
+        errors: list = []
 
-    ########################################################################################
-    ########################################################################################
+        # COMPARE CONFIG AGAINST MINIMUM REQUIRED SCHEMA
+        testing.validate_schema(experiment_config, {
+            'dataset': dict,
+            'feature_engineering': {
+                'features': list,
+                'drop_nans': bool
+            },
+            'segmentation': list,
+            'trading_strategy': {
+                'base_strategy': dict,
+                'custom_strategy': {
+                    'strategy_name': str,
+                }
+            }
+        })
 
-    # FEATURE MAPPING
-    available_features = {
-        'shift_column': shift_column,
-        'stochastic_k': stochastic_k,
-    }
+    ##########################################################################
+    ### COMPLETED TESTS
 
-    # CONVERT INPUT TO DATAFRAME
-    pipeline_components.append(('hidden_input_conversion', to_dataframe()))
+        # TEST DATASET LOADING
+        dataset_config: dict = experiment_config['dataset']
+        errors += testing.run_tests('actions/dataset', dataset_config)
 
-    # ADD EACH CUSTOM FEATURE
-    for nth, block in enumerate(experiment_config['feature_engineering']['features']):
-        feature_name = block['feature_name']
-        feature_params = block['feature_params']
+        # ALL THE DATASET TESTS PASSED
+        # MAKE A REAL SAMPLE DATASET AVAILABLE FOR OTHER TESTS
+        sample_dataset: list[dict] = load_dataset(dataset_config, unittesting=200)
 
-        feature_instance = available_features[feature_name](feature_params)
-        pipeline_components.append((f'yaml_feature_{nth+1}', feature_instance))
+        # # TEST FEATURE ENGINEERING
+        features_config: dict = experiment_config['feature_engineering']['features']
+        errors += feature_prep(features_config, sample_dataset)
 
-    # DROP ALL ROWS WITH NAN VALUES
-    pipeline_components.append(('hidden_drop_nan', drop_nan_rows()))
+        # TEST DATA SEGMENTATION
+        segmentation_config: dict = experiment_config['segmentation']
+        errors += testing.run_tests('actions/segmentation', segmentation_config)
 
-    ########################################################################################
-    ########################################################################################
+    ##########################################################################
+    ### TESTS IN DEVELOPMENT
 
-    # CREATE A TEMP DATAFRAME TO GENERATE TRAINING LABELS
-    temp_dataset = DataFrame(dataset)
+        # TEST THE BASE TRADING STRATEGY
+        trading_config: dict = experiment_config['trading_strategy']
+        errors += testing.run_tests('actions/trading_strategies', trading_config)
 
-    # APPLY EACH FEATURE
-    for block in pipeline_components:
-        _, feature = block
-        feature.transform(temp_dataset)
+        # TEST THE CUSTOM STRATEGY
+        strategy_name = trading_config['custom_strategy']['strategy_name']
+        errors += testing.run_tests(f'actions/trading_strategies/{strategy_name}', trading_config)
 
-    # EXTRACT THE LABEL COLUMN
-    label_column = experiment_config['model_training']['label_column']
-    labels = temp_dataset[label_column].tolist()
-    
-    # EXTRACT THE TIMESTAMPS FOR ROWS WITH LABELS
-    # THEN DELETE THE TEMP DATAFRAME TO FREE UP MEMORY
-    timestamps_with_labels = temp_dataset['timestamp'].tolist()
-    del temp_dataset
 
-    # FILTER OUT ALL DATASET ROWS WITHOUT LABELS
-    dataset = [x for x in dataset if x['timestamp'] in timestamps_with_labels]
 
-    ########################################################################################
-    ########################################################################################
 
-    # CONVERT DATAFRAME TO FLOAT MATRIX
-    pipeline_components.append(('hidden_ouput_conversion', to_feature_matrix({
-        'feature_columns': experiment_config['model_training']['feature_columns']
-    })))
 
-    # ADD THE SCALER AND MODEL
-    pipeline_components.append(('standard_scaler', StandardScaler()))
-    pipeline_components.append(('linreg_model', LinearRegression()))
 
-    # CREATE THE PIPELINE
-    pipeline = Pipeline(pipeline_components)
-    print(pipeline)
 
-if __name__ == '__main__':
-    run()
+
+
+
+
+
+
+
+
+
+
+
+    # OTHERWISE, STOP THE EXPERIMENT HERE
+    except Exception as error:
+        return print(f'\nFATAL EXCEPTION: {error}')
+
+
+def feature_prep(features_config, sample_dataset):
+    errors = []
+    feature_columns = set()
+
+    # LOOP THROUGH EACH FEATURE
+    for nth, feature_block in enumerate(features_config):
+
+        # MAKE SURE IT CONTAINS THE CORRECT PROPERTIES
+        for prop_name in ['feature_name', 'feature_params', 'output_column']:
+            assert prop_name in feature_block, f"PROPERTY '{prop_name}' MISSING FROM FEATURE #{nth+1}"
+
+        feature_name = feature_block['feature_name']
+        feature_params = feature_block['feature_params']
+        output_column = feature_block['output_column']
+
+        # MAKE SURE OUTPUT COLUMN NAMES ARE UNIQUE
+        assert output_column not in feature_columns, f"DUPLICATE FEATURE OUTPUT COLUMN FOUND ({output_column})"
+        feature_columns.add(output_column)
+
+        # UNITTEST THE FEATURE
+        errors += testing.run_tests(f"actions/feature_engineering/{feature_name}", {
+            **feature_params,
+            '_sample_dataset': sample_dataset
+        })
+
+    return errors
+
+run()

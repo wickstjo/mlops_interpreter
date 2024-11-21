@@ -1,11 +1,5 @@
 from common import cassandra_utils
 
-# def load_dataset(db_table: str, stock_symbol: str, timestamps: dict, unittesting=False):
-#     assert isinstance(input_data, dict), f"ARG 'input_data' MUST BE OF TYPE DICT"
-
-#     start_date = timestamps['start']
-#     end_date = timestamps['end']
-
 def load_dataset(input_data: dict, unittesting=False):
     assert isinstance(input_data, dict), f"ARG 'input_data' MUST BE OF TYPE DICT"
 
@@ -37,3 +31,16 @@ def load_dataset(input_data: dict, unittesting=False):
     dataset: list[dict] = cassandra.read(query_string)
 
     return dataset
+
+#######################################
+### EXAMPLE USAGE
+
+# load_dataset({
+#     'db_table': 'shohel.refined_stock_data',
+#     'stock_symbol': 'AAPL',
+#     'timestamps': {
+#         'start': '2019-01-01 00:00:00',
+#         'end': '2019-01-10 00:00:00'
+#     },
+#     'min_length_threshold': 10
+# })
