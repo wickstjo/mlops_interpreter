@@ -1,5 +1,6 @@
-import unittest, os, json
+import unittest, inspect, os, json
 from abc import ABC
+from pandas import DataFrame
 # import coverage
 
 # THE ENVIRONMENT VAR THAT UNITTESTS REQUIRE TO OBTAIN DYNAMIC ARGUMENTS
@@ -9,10 +10,14 @@ env_var_name: str = '_UNITTEST_ARGS'
 ################################################################################################
 
 # SHARED CONSTRUCTOR FOR ALL UNITTESTS
-class unittest_base(unittest.TestCase, ABC):
+class base_unittest(unittest.TestCase, ABC):
     def setUp(self):
         stringified_dict: str = os.environ.get(env_var_name)
         self.input_params: dict = json.loads(stringified_dict)
+
+        # HANDLE SAMPLE DATASET FORMATTING
+        if '_sample_dataset' in self.input_params:
+            self.input_params['_sample_dataset'] = DataFrame(self.input_params['_sample_dataset'])
 
     # COMPARE TWO DICTS FOR SCHEMATIC DIFFERENCES
     def validate_schema(self, user_dict: dict, ref_dict: dict, root_path=''):
@@ -41,40 +46,44 @@ class unittest_base(unittest.TestCase, ABC):
 ################################################################################################
 ################################################################################################
 
-# WRAPPER TO PROGRAMMATICALLY INVOKE THE UNITTESTS OF A SPECIFIC MODULE
-def run_tests(module_dir: str, input_data: dict|list):
-    assert isinstance(module_dir, str), f"ARG 'module_dir' MUST BE OF TYPE STR (GOT {type(module_dir)})"
-    assert isinstance(input_data, dict|list), f"ARG 'input_args' MUST BE OF TYPE DICT (GOT {type(input_data)})"
+class StopOnFirstErrorResult(unittest.TextTestResult):
+    def addError(self, test, err):
+        super().addError(test, err)
+        self.stop()  # Stop further tests on error
 
-    # MAKE SURE THE MODULE EXISTS
-    if os.path.isdir(module_dir):
-        for filename in os.listdir(module_dir):
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self.stop()  # Stop further tests on failure
 
-            # MAKE SURE IT CONTAINS UNITTEST FILES
-            if filename.endswith('tests.py'):
+def run_tests(module, input_params: dict):
 
-                # MAKE INPUT ARGS AVAILABLE FOR THE UNITTESTS THROUGH ENVIRONMENT
-                os.environ[env_var_name] = json.dumps(input_data)
+    # HANDLE SAMPLE DATASET FORMATTING
+    if '_sample_dataset' in input_params:
+        input_params['_sample_dataset'] = input_params['_sample_dataset'].to_dict(orient='records')
 
-                # cov = coverage.Coverage()
-                # cov.start()
+    # MAKE INPUT ARGS AVAILABLE FOR THE UNITTESTS THROUGH ENVIRONMENT
+    os.environ[env_var_name] = json.dumps(input_params)
 
-                # LOAD THE TESTSUITE
-                test_loader = unittest.TestLoader()
-                test_suite = test_loader.discover(start_dir=module_dir, pattern=f'*_tests.py')
-
-                # RUN THE TESTS    
-                test_runner = unittest.TextTestRunner(verbosity=2)
-                output = test_runner.run(test_suite)
-
-                # cov.stop()
-                # cov.save()
-                # cov.report()
-
-                return output.errors
+    # CREATE THE TESTING SUITE
+    suite = unittest.TestSuite()
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(module))
     
-    # OTHERWISE, THE MODULE PATH WAS BAD -- CANCEL THE EXPERIMENT
-    raise Exception(f"UNITTESTS FOR MODULE '{module_dir}' COULD NOT BE FOUND")
+    # RAISE ERROR IF NO UNITTESTS WERE FOUND
+    if len(suite._tests) == 0:
+        raise Exception(f"MODULE '{module}' HAS NO UNITTESTS")
+    
+    # OTHERWISE, RUN THE TESTS
+    runner = unittest.TextTestRunner(verbosity=2, resultclass=StopOnFirstErrorResult)
+    output = runner.run(suite)
+
+    # KILL PARENT PROCESS IF YOU FIND ANY ERRORS/FAILS
+    if len(output.errors) > 0 or len(output.failures) > 0:
+        raise Exception(output)
+
+    return output
+
+################################################################################################
+################################################################################################
 
 # COMPARE TWO DICTS FOR SCHEMATIC DIFFERENCES
 def validate_schema(user_dict: dict, ref_dict: dict, root_path=''):
@@ -99,3 +108,25 @@ def validate_schema(user_dict: dict, ref_dict: dict, root_path=''):
 
             value_error: str = f"KEY '{path}' IS OF WRONG TYPE"
             assert value_type == expected_type, value_error
+
+################################################################################################
+################################################################################################
+
+def build_and_validate_schema(sample_row, expected_schema):
+    reference_schema = {}
+
+    # YAML REFERS TO TYPES BY STRING NAME
+    type_mapping = {
+        'str': str,
+        'int': int,
+        'float': float,
+    }
+
+    # BUILD THE REFERENCE SCHEMA
+    for key, key_type in expected_schema.items():
+        key_error = f"TYPE '{key_type}' FOR COLUMN '{key}' MISSING FROM UNITTEST TYPE MAPPING"
+        assert key_type in type_mapping, key_error
+        reference_schema[key] = type_mapping[key_type]
+
+    # MAKE SURE EACH ROW SCHEMA MATCHES
+    validate_schema(sample_row, reference_schema)

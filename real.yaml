@@ -9,20 +9,24 @@ dataset:
             start: '2019-01-01 00:00:00'
             end: '2019-01-10 00:00:00'
 
-    # EXPECTED ROW SCHEMA
-    expected_schema:
-        symbol: str
-        timestamp: str
-        open: float
-        close: float
-        high: float
-        low: float
-        volume: int
+        # EXPECTED ROW SCHEMA
+        expected_schema:
+            symbol: str
+            timestamp: str
+            open: float
+            close: float
+            high: float
+            low: float
+            volume: int
 
 #######################################################################################
 #######################################################################################
 
 features:
+
+    # # HIDDEN: CONVERT INPUT TO DATAFRAME
+    # -   name: to_dataframe
+    #     params: {}
 
     # ADD STOCHASTIC K FEATURE
     -   name: stochastic_k
@@ -37,6 +41,26 @@ features:
             target_column: close
             shift_by: 14
             output_column: shifted_close
+
+    # # HIDDEN: DROP ALL NAN ROWS
+    # -   name: drop_nan_rows
+    #     params: {}
+
+    # # HIDDEN: EXTRACT THE FEATURE COLUMNS
+    # -   name: extract_columns
+    #     params:
+    #         columns:
+    #             - open
+    #             - close
+    #             - high
+    #             - low
+    #             - volume
+    #             - sk5
+    #             - shifted_close
+
+    # # HIDDEN: CONVERT DATAFRAME TO FLOAT MATRIX
+    # -   name: to_float_matrix
+    #     params: {}
 
 #######################################################################################
 #######################################################################################

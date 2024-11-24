@@ -1,0 +1,20 @@
+--------
+DATASET LEN:        8605
+TRAIN SEGMENT:      6454
+TEST SEGMENT:       1291
+VALIDATE SEGMENT:   860
+--------
+TRAIN SCORE:        0.9836
+TEST SCORE:         0.7872
+VALIDATE SCORE:     0.8906
+--------
+Pipeline(steps=[
+    ('hidden_to_df', to_dataframe()),
+    ('0_stochastic_k', stochastic_k(window_size=5)),
+    ('1_shift_column', shift_column(column=close, shift_by=14)),
+    ('hidden_drop_nans', drop_nan_rows()),
+    ('hidden_feature_extraction', extract_columns(columns=['open', 'close', 'high', 'low', 'volume', 'sk5'])),
+    ('hidden_to_matrix', to_float_matrix()),
+    ('scaler', StandardScaler()),
+    ('model', LinearRegression())
+])

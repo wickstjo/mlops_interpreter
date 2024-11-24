@@ -1,108 +1,161 @@
-from common import misc, testing
-from actions.dataset.load_dataset import load_dataset
+from common import misc
+from sklearn.pipeline import Pipeline
+from pydantic import BaseModel
+
+from mappings.data_retrieval import repository as retrieval_options
+from mappings.features import repository as feature_options
+from mappings.models import repository as model_options
+from mappings.scalers import repository as scaler_options
+from mappings.segmentation import repository as segmentation_options
+
+from components.segmentation.generate_labels import generate_segment_labels
+
+##############################################################################################################
+##############################################################################################################
+
+# HIDE TRACEBACK ERRORS TEMPORARILY
+import sys
+sys.tracebacklimit = 0
+
+class name_params_pair(BaseModel):
+    name: str
+    params: dict
+
+class method_params_pair(BaseModel):
+    method: str
+    params: dict
+
+class dataset_schema(BaseModel):
+    method: str
+    params: dict
+    expected_schema: dict[str, str]
+
+class training_schema(BaseModel):
+    feature_columns: list[str]
+    label_column: str
+    segmentation: method_params_pair
+    scaler: name_params_pair
+    model: name_params_pair
+
+class config_schema(BaseModel):
+    dataset: dataset_schema
+    features: list[name_params_pair]
+    training: training_schema
+
+##############################################################################################################
+##############################################################################################################
 
 def run():
     try:
+        raw_config: dict = misc.load_yaml('config.yaml')
+        config = config_schema(**raw_config)
 
-    ##########################################################################
-    ### LOAD EXPERIMENT YAML CONFIG
+        pipeline_components = []
 
-        experiment_config: dict = misc.load_yaml('config.yaml')
-        errors: list = []
+    ########################################################################################
+    ### LOAD & SEGMENT DATASET
 
-        # COMPARE CONFIG AGAINST MINIMUM REQUIRED SCHEMA
-        testing.validate_schema(experiment_config, {
-            'dataset': dict,
-            'feature_engineering': {
-                'features': list,
-                'drop_nans': bool
-            },
-            'segmentation': list,
-            'trading_strategy': {
-                'base_strategy': dict,
-                'custom_strategy': {
-                    'strategy_name': str,
-                }
-            }
-        })
+        retrieval_method = retrieval_options.get(config.dataset.method)
+        dataset = retrieval_method(config.dataset.params)
+        # dataset = retrieval_method(config.dataset.params, unittest_limit=200)
 
-    ##########################################################################
-    ### COMPLETED TESTS
+        segmentation_method = segmentation_options.get(config.training.segmentation.method)
+        dataset = segmentation_method(config.training.segmentation.params, dataset)
 
-        # TEST DATASET LOADING
-        dataset_config: dict = experiment_config['dataset']
-        errors += testing.run_tests('actions/dataset', dataset_config)
+    ########################################################################################
+    ### ADD FIRST LAYER OF FEATURES
 
-        # ALL THE DATASET TESTS PASSED
-        # MAKE A REAL SAMPLE DATASET AVAILABLE FOR OTHER TESTS
-        sample_dataset: list[dict] = load_dataset(dataset_config, unittesting=200)
+        # HIDDEN -- CONVERT INPUT TO DATAFRAME
+        feature_instance = feature_options.create('to_dataframe')
+        pipeline_components.append(('hidden_to_df', feature_instance))
 
-        # # TEST FEATURE ENGINEERING
-        features_config: dict = experiment_config['feature_engineering']['features']
-        errors += feature_prep(features_config, sample_dataset)
+        # NORMAL -- APPLY EACH CUSTOM FEATURE
+        for nth, feature in enumerate(config.features):
+            feature_instance = feature_options.create(feature.name, feature.params)
+            pipeline_components.append((f'{nth}_{feature.name}', feature_instance))
 
-        # TEST DATA SEGMENTATION
-        segmentation_config: dict = experiment_config['segmentation']
-        errors += testing.run_tests('actions/segmentation', segmentation_config)
+        # HIDDEN -- DROP ROWS WITH NANS
+        feature_instance = feature_options.create('drop_nan_rows')
+        pipeline_components.append(('hidden_drop_nans', feature_instance))
 
-    ##########################################################################
-    ### TESTS IN DEVELOPMENT
+    ########################################################################################
+    ### GENERATE LABELS WITH THE CURRENT SET OF FEATURES
 
-        # TEST THE BASE TRADING STRATEGY
-        trading_config: dict = experiment_config['trading_strategy']
-        errors += testing.run_tests('actions/trading_strategies', trading_config)
+        labels: dict[str, list] = generate_segment_labels(
+            dataset, 
+            pipeline_components, 
+            config.training.label_column
+        )
 
-        # TEST THE CUSTOM STRATEGY
-        strategy_name = trading_config['custom_strategy']['strategy_name']
-        errors += testing.run_tests(f'actions/trading_strategies/{strategy_name}', trading_config)
+    ########################################################################################
+    ### ADD SECOND LAYER OF FEATURES
 
+        # HIDDEN -- EXTRACT FEATURE COLUMNS
+        feature_instance = feature_options.create('extract_columns', { 'columns': config.training.feature_columns })
+        pipeline_components.append(('hidden_feature_extraction', feature_instance))
 
+        # HIDDEN -- CONVERT DATAFRAME TO FLAOT MATRIX
+        feature_instance = feature_options.create('to_float_matrix')
+        pipeline_components.append(('hidden_to_matrix', feature_instance))
 
+    ########################################################################################
+    ### ADD SCALER & MODEL
 
+        scaler_instance = scaler_options.create(config.training.scaler.name, config.training.scaler.params)
+        pipeline_components.append(('scaler', scaler_instance))
 
+        model_instance = model_options.create(config.training.model.name, config.training.model.params)
+        pipeline_components.append(('model', model_instance))
 
+    ########################################################################################
+    ### TRAIN THE PIPELINE
 
+        pipeline = Pipeline(pipeline_components)
+        pipeline.fit(dataset['train'], labels['train'])
 
+    ########################################################################################
+    ### EVALUATE PIPELINE
 
+        # CHECK MODEL SCORE FOR EACH DATASET SEGMENT
+        train_score = round(pipeline.score(dataset['train'], labels['train']), 4)
+        test_score = round(pipeline.score(dataset['test'], labels['test']), 4)
+        valid_score = round(pipeline.score(dataset['validate'], labels['validate']), 4)
 
+        train_len = len(dataset['train'])
+        test_len = len(dataset['test'])
+        validate_len = len(dataset['validate'])
+        total_len = train_len + test_len + validate_len
 
+        print('--------')
+        print(f'DATASET LEN:\t\t{total_len}')
+        print(f'TRAIN SEGMENT:\t\t{train_len}')
+        print(f'TEST SEGMENT:\t\t{test_len}')
+        print(f'VALIDATE SEGMENT:\t{validate_len}')
+        
+        print('--------')
+        print(f'TRAIN SCORE:\t\t{train_score}')
+        print(f'TEST SCORE:\t\t{test_score}')
+        print(f'VALIDATE SCORE:\t\t{valid_score}')
 
+        print('--------')
+        print('SKLEARN PIPELINE STEPS:')
+        for step in pipeline.steps:
+            print(f'   {step}')
+        print('--------')
 
-
-
-
-
-
-    # OTHERWISE, STOP THE EXPERIMENT HERE
+    # OTHERWISE, AT LEAST ONE TEST FAILED
+    # THEREFORE, BLOCK THE EXPERIMENT
+    except AssertionError as error:
+        print(f'\nINTERPRETER-SIDE ASSERTION ERROR:')
+        print('----------------------------------------------------------------------')
+        print(error)
+        return False
+    
     except Exception as error:
-        return print(f'\nFATAL EXCEPTION: {error}')
+        print(f'\nINTERPRETER-SIDE FATAL ERROR:')
+        print('----------------------------------------------------------------------')
+        print(error)
+        return False
 
-
-def feature_prep(features_config, sample_dataset):
-    errors = []
-    feature_columns = set()
-
-    # LOOP THROUGH EACH FEATURE
-    for nth, feature_block in enumerate(features_config):
-
-        # MAKE SURE IT CONTAINS THE CORRECT PROPERTIES
-        for prop_name in ['feature_name', 'feature_params', 'output_column']:
-            assert prop_name in feature_block, f"PROPERTY '{prop_name}' MISSING FROM FEATURE #{nth+1}"
-
-        feature_name = feature_block['feature_name']
-        feature_params = feature_block['feature_params']
-        output_column = feature_block['output_column']
-
-        # MAKE SURE OUTPUT COLUMN NAMES ARE UNIQUE
-        assert output_column not in feature_columns, f"DUPLICATE FEATURE OUTPUT COLUMN FOUND ({output_column})"
-        feature_columns.add(output_column)
-
-        # UNITTEST THE FEATURE
-        errors += testing.run_tests(f"actions/feature_engineering/{feature_name}", {
-            **feature_params,
-            '_sample_dataset': sample_dataset
-        })
-
-    return errors
-
-run()
+if __name__ == '__main__':
+    run()
